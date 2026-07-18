@@ -41,6 +41,7 @@ type Client struct {
 	Scenes        *SceneService
 	Devices       *DeviceService
 	Motion        *MotionService
+	GroupedMotion *GroupedMotionService
 	Temperature   *TemperatureService
 	LightLevel    *LightLevelService
 	DevicePower   *DevicePowerService
@@ -176,6 +177,7 @@ func New(addr, appKey string, opts ...Option) (*Client, error) {
 	c.Scenes = &SceneService{c: c}
 	c.Devices = &DeviceService{c: c}
 	c.Motion = &MotionService{c: c}
+	c.GroupedMotion = &GroupedMotionService{c: c}
 	c.Temperature = &TemperatureService{c: c}
 	c.LightLevel = &LightLevelService{c: c}
 	c.DevicePower = &DevicePowerService{c: c}

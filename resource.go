@@ -19,6 +19,7 @@ const (
 	TypeZone          ResourceType = "zone"
 	TypeScene         ResourceType = "scene"
 	TypeMotion        ResourceType = "motion"
+	TypeGroupedMotion ResourceType = "grouped_motion"
 	TypeTemperature   ResourceType = "temperature"
 	TypeLightLevel    ResourceType = "light_level"
 	TypeButton        ResourceType = "button"

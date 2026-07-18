@@ -182,6 +182,44 @@ func (s *MotionService) Get(ctx context.Context, id ID) (Motion, error) {
 	return getOne[Motion](ctx, s.c, "/resource/motion", id)
 }
 
+// GroupedMotion aggregates the motion state of every sensor in a group,
+// owned by a bridge_home rather than a device. Newer bridges create one
+// automatically. Note the shape differs from Motion: there is no top-level
+// motion or motion_valid, only the report, so a caller reads the last reported
+// value and its timestamp. Changed is RFC 3339 and may be empty before the
+// first report.
+type GroupedMotion struct {
+	ID      ID     `json:"id"`
+	Type    string `json:"type"`
+	Owner   Ref    `json:"owner"`
+	Enabled bool   `json:"enabled"`
+	Motion  struct {
+		MotionReport *struct {
+			Changed string `json:"changed"`
+			Motion  bool   `json:"motion"`
+		} `json:"motion_report,omitempty"`
+	} `json:"motion"`
+}
+
+// Detected reports whether the group last saw motion, and whether a reading
+// has been reported at all. A group with no report yet returns (false, false).
+func (g GroupedMotion) Detected() (motion, reported bool) {
+	if g.Motion.MotionReport == nil {
+		return false, false
+	}
+	return g.Motion.MotionReport.Motion, true
+}
+
+type GroupedMotionService struct{ c *Client }
+
+func (s *GroupedMotionService) List(ctx context.Context) ([]GroupedMotion, error) {
+	return getMany[GroupedMotion](ctx, s.c, "/resource/grouped_motion")
+}
+
+func (s *GroupedMotionService) Get(ctx context.Context, id ID) (GroupedMotion, error) {
+	return getOne[GroupedMotion](ctx, s.c, "/resource/grouped_motion", id)
+}
+
 // Temperature reports in Celsius, and only from mains-powered or recently
 // woken battery sensors.
 type Temperature struct {
