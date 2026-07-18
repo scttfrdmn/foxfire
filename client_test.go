@@ -184,6 +184,71 @@ func TestSubscribeDecodesBatches(t *testing.T) {
 	}
 }
 
+// A button switch presents several button services owned by one device, told
+// apart by control_id. Validating the decode here rather than on hardware: no
+// button device is available, and the value that matters (the press) arrives
+// on the stream, tested separately below.
+func TestListButtons(t *testing.T) {
+	c, _ := newFakeBridge(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/clip/v2/resource/button" {
+			t.Errorf("path = %q", r.URL.Path)
+		}
+		fmt.Fprint(w, `{"errors":[],"data":[
+			{"id":"btn-1","type":"button","owner":{"rid":"dev","rtype":"device"},
+			 "metadata":{"control_id":1},
+			 "button":{"last_event":"short_release","event_values":["initial_press","short_release"]}},
+			{"id":"btn-2","type":"button","owner":{"rid":"dev","rtype":"device"},
+			 "metadata":{"control_id":2},"button":{}}]}`)
+	}))
+
+	btns, err := c.Buttons.List(context.Background())
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(btns) != 2 {
+		t.Fatalf("got %d buttons, want 2", len(btns))
+	}
+	if btns[0].Metadata.ControlID != 1 || btns[0].Button.LastEvent != "short_release" {
+		t.Errorf("button 1 decoded wrong: %+v", btns[0])
+	}
+	if len(btns[0].Button.EventValues) != 2 {
+		t.Errorf("event_values not decoded: %+v", btns[0].Button.EventValues)
+	}
+	if btns[1].Metadata.ControlID != 2 {
+		t.Errorf("button 2 control_id wrong: %+v", btns[1])
+	}
+}
+
+// Button presses arrive on the event stream as a ButtonReport, not from a GET.
+// This is the path a caller actually watches, so it is the one that must decode.
+func TestButtonEventDecodes(t *testing.T) {
+	c, _ := newFakeBridge(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, "data: [{\"creationtime\":\"2026-07-18T10:00:00Z\",\"type\":\"update\","+
+			"\"data\":[{\"id\":\"btn-1\",\"type\":\"button\","+
+			"\"button\":{\"last_event\":\"initial_press\"}}]}]\n\n")
+		w.(http.Flusher).Flush()
+		time.Sleep(100 * time.Millisecond)
+	}))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	batches, _ := c.Subscribe(ctx)
+	select {
+	case b := <-batches:
+		if len(b.Events) != 1 || b.Events[0].Button == nil {
+			t.Fatalf("button event not decoded: %+v", b)
+		}
+		if b.Events[0].Button.LastEvent != "initial_press" {
+			t.Errorf("last_event = %q, want initial_press", b.Events[0].Button.LastEvent)
+		}
+	case <-ctx.Done():
+		t.Fatal("no batch received")
+	}
+}
+
 func TestNewRequiresExplicitTLSPosture(t *testing.T) {
 	if _, err := New("192.0.2.1", "key"); err == nil {
 		t.Fatal("expected New to refuse an unconfigured trust posture")

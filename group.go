@@ -220,6 +220,40 @@ func (s *GroupedMotionService) Get(ctx context.Context, id ID) (GroupedMotion, e
 	return getOne[GroupedMotion](ctx, s.c, "/resource/grouped_motion", id)
 }
 
+// Button is one physical button on a switch or dimmer. A four-button dimmer
+// presents four button services owned by one device, told apart by
+// Metadata.ControlID (1-based). The interesting data is transient and arrives
+// on the event stream as a ButtonReport; a plain GET mostly tells you a button
+// exists and what events it can emit. LastEvent is one of initial_press,
+// repeat, short_release, long_press, long_release.
+type Button struct {
+	ID       ID     `json:"id"`
+	Type     string `json:"type"`
+	Owner    Ref    `json:"owner"`
+	Metadata struct {
+		ControlID int `json:"control_id"`
+	} `json:"metadata"`
+	Button struct {
+		LastEvent      string `json:"last_event,omitempty"`
+		RepeatInterval int    `json:"repeat_interval,omitempty"`
+		ButtonReport   *struct {
+			Updated string `json:"updated"`
+			Event   string `json:"event"`
+		} `json:"button_report,omitempty"`
+		EventValues []string `json:"event_values,omitempty"`
+	} `json:"button"`
+}
+
+type ButtonService struct{ c *Client }
+
+func (s *ButtonService) List(ctx context.Context) ([]Button, error) {
+	return getMany[Button](ctx, s.c, "/resource/button")
+}
+
+func (s *ButtonService) Get(ctx context.Context, id ID) (Button, error) {
+	return getOne[Button](ctx, s.c, "/resource/button", id)
+}
+
 // Temperature reports in Celsius, and only from mains-powered or recently
 // woken battery sensors.
 type Temperature struct {
