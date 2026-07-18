@@ -42,6 +42,8 @@ type Client struct {
 	Devices       *DeviceService
 	Motion        *MotionService
 	Temperature   *TemperatureService
+	LightLevel    *LightLevelService
+	DevicePower   *DevicePowerService
 	Bridge        *BridgeService
 	Zigbee        *ZigbeeConnectivityService
 }
@@ -175,6 +177,8 @@ func New(addr, appKey string, opts ...Option) (*Client, error) {
 	c.Devices = &DeviceService{c: c}
 	c.Motion = &MotionService{c: c}
 	c.Temperature = &TemperatureService{c: c}
+	c.LightLevel = &LightLevelService{c: c}
+	c.DevicePower = &DevicePowerService{c: c}
 	c.Bridge = &BridgeService{c: c}
 	c.Zigbee = &ZigbeeConnectivityService{c: c}
 

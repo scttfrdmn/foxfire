@@ -57,6 +57,8 @@ func run(args []string) error {
 		return cmdSwitch(ctx, args)
 	case "bridge":
 		return cmdBridge(ctx)
+	case "sensors":
+		return cmdSensors(ctx)
 	case "watch":
 		return cmdWatch(ctx)
 	case "help", "-h", "--help":
@@ -78,6 +80,7 @@ func usage() {
   on   <room>       turn a room on
   off  <room>       turn a room off
   bridge            show bridge id, firmware, and zigbee status
+  sensors           show motion, light, temperature, and battery readings
   watch             stream events until interrupted
 
 Credentials are stored in ~/.config/foxfire/credentials.json.
@@ -325,6 +328,50 @@ func cmdBridge(ctx context.Context) error {
 				reach = "connected"
 			}
 			fmt.Fprintf(w, "Zigbee\t%s (%s)\n", reach, z.MACAddress)
+		}
+	}
+	return w.Flush()
+}
+
+func cmdSensors(ctx context.Context) error {
+	c, err := client()
+	if err != nil {
+		return err
+	}
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "SERVICE\tREADING\tID")
+
+	if ms, err := c.Motion.List(ctx); err == nil {
+		for _, m := range ms {
+			v := "invalid"
+			if m.Motion.MotionValid {
+				v = fmt.Sprintf("motion=%v", m.Motion.Motion)
+			}
+			fmt.Fprintf(w, "motion\t%s\t%s\n", v, m.ID)
+		}
+	}
+	if ls, err := c.LightLevel.List(ctx); err == nil {
+		for _, l := range ls {
+			v := "invalid"
+			if l.Light.LightLevelValid {
+				v = fmt.Sprintf("%d (~%.0f lux)", l.Light.LightLevel, l.Lux())
+			}
+			fmt.Fprintf(w, "light_level\t%s\t%s\n", v, l.ID)
+		}
+	}
+	if ts, err := c.Temperature.List(ctx); err == nil {
+		for _, t := range ts {
+			v := "invalid"
+			if t.Temperature.TemperatureValid {
+				v = fmt.Sprintf("%.1f C", t.Temperature.Temperature)
+			}
+			fmt.Fprintf(w, "temperature\t%s\t%s\n", v, t.ID)
+		}
+	}
+	if ps, err := c.DevicePower.List(ctx); err == nil {
+		for _, p := range ps {
+			fmt.Fprintf(w, "device_power\t%d%% (%s)\t%s\n",
+				p.PowerState.BatteryLevel, p.PowerState.BatteryState, p.ID)
 		}
 	}
 	return w.Flush()

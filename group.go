@@ -3,6 +3,7 @@ package foxfire
 import (
 	"context"
 	"fmt"
+	"math"
 )
 
 // Room is a physical grouping of devices. A device belongs to at most one
@@ -202,4 +203,60 @@ func (s *TemperatureService) List(ctx context.Context) ([]Temperature, error) {
 
 func (s *TemperatureService) Get(ctx context.Context, id ID) (Temperature, error) {
 	return getOne[Temperature](ctx, s.c, "/resource/temperature", id)
+}
+
+// LightLevel is an ambient-light sensor service. The raw value is not lux: the
+// bridge reports 10000*log10(lux)+1, so lux = 10^((level-1)/10000). LightValid
+// distinguishes a real reading from a stale one on a disabled or sleeping
+// sensor, and must be checked -- a disabled sensor reports its last value, not
+// zero and not an error.
+type LightLevel struct {
+	ID      ID     `json:"id"`
+	Type    string `json:"type"`
+	Owner   Ref    `json:"owner"`
+	Enabled bool   `json:"enabled"`
+	Light   struct {
+		LightLevel      int  `json:"light_level"`
+		LightLevelValid bool `json:"light_level_valid"`
+	} `json:"light"`
+}
+
+// Lux converts the bridge's logarithmic light_level to approximate lux. The
+// reading is only meaningful when Light.LightLevelValid is true.
+func (l LightLevel) Lux() float64 {
+	return math.Pow(10, float64(l.Light.LightLevel-1)/10000)
+}
+
+type LightLevelService struct{ c *Client }
+
+func (s *LightLevelService) List(ctx context.Context) ([]LightLevel, error) {
+	return getMany[LightLevel](ctx, s.c, "/resource/light_level")
+}
+
+func (s *LightLevelService) Get(ctx context.Context, id ID) (LightLevel, error) {
+	return getOne[LightLevel](ctx, s.c, "/resource/light_level", id)
+}
+
+// DevicePower reports the battery state of a battery-powered device. Battery
+// level is a percentage; state is one of "normal", "low", or "critical". A
+// mains-powered device has no device_power service at all, so the absence of
+// one is not an error.
+type DevicePower struct {
+	ID         ID     `json:"id"`
+	Type       string `json:"type"`
+	Owner      Ref    `json:"owner"`
+	PowerState struct {
+		BatteryState string `json:"battery_state"`
+		BatteryLevel int    `json:"battery_level"`
+	} `json:"power_state"`
+}
+
+type DevicePowerService struct{ c *Client }
+
+func (s *DevicePowerService) List(ctx context.Context) ([]DevicePower, error) {
+	return getMany[DevicePower](ctx, s.c, "/resource/device_power")
+}
+
+func (s *DevicePowerService) Get(ctx context.Context, id ID) (DevicePower, error) {
+	return getOne[DevicePower](ctx, s.c, "/resource/device_power", id)
 }
