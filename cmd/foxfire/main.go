@@ -48,7 +48,7 @@ func run(args []string) error {
 	case "discover":
 		return cmdDiscover(ctx)
 	case "pair":
-		return cmdPair(ctx)
+		return cmdPair(ctx, args[1:])
 	case "lights":
 		return cmdLights(ctx)
 	case "rooms":
@@ -69,7 +69,8 @@ func usage() {
 	fmt.Print(`foxfire - Philips Hue CLIP v2 client
 
   discover          find bridges via mDNS, falling back to cloud discovery
-  pair              press the link button, then run this
+  pair [id|ip]      press the link button, then run this; pass a bridge
+                    ID or IP to choose when more than one is present
   lights            list lights
   rooms             list rooms
   on   <room>       turn a room on
@@ -147,12 +148,45 @@ func cmdDiscover(ctx context.Context) error {
 	return w.Flush()
 }
 
-func cmdPair(ctx context.Context) error {
+func cmdPair(ctx context.Context, args []string) error {
 	bridges, err := foxfire.Discover(ctx, 5*time.Second)
 	if err != nil {
 		return err
 	}
-	b := bridges[0]
+	if len(bridges) == 0 {
+		return fmt.Errorf("no bridges discovered")
+	}
+
+	// Selecting bridges[0] is unsafe when more than one bridge is on the
+	// network -- discovery order is not stable, so a blind pair can pin the
+	// wrong hub. Require an explicit selector (bridge ID or IP) whenever the
+	// choice is ambiguous.
+	var b foxfire.Bridge
+	sel := strings.ToLower(strings.TrimSpace(strings.Join(args, "")))
+	switch {
+	case sel != "":
+		match := -1
+		for i, cand := range bridges {
+			if strings.ToLower(cand.ID) == sel || cand.Addr == sel {
+				match = i
+				break
+			}
+		}
+		if match < 0 {
+			return fmt.Errorf("no discovered bridge matches %q", sel)
+		}
+		b = bridges[match]
+	case len(bridges) == 1:
+		b = bridges[0]
+	default:
+		var lines []string
+		for _, cand := range bridges {
+			lines = append(lines, fmt.Sprintf("  %s  %s", cand.ID, cand.Addr))
+		}
+		return fmt.Errorf("%d bridges found; specify one by ID or IP:\n%s",
+			len(bridges), strings.Join(lines, "\n"))
+	}
+
 	if b.ID == "" {
 		return fmt.Errorf("bridge at %s advertised no bridge ID; cannot pin its certificate", b.Addr)
 	}
