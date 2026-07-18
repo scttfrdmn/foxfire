@@ -1,0 +1,211 @@
+package foxfire
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+)
+
+// newFakeBridge stands up a TLS server speaking enough CLIP v2 to exercise
+// the client. Using httptest's own certificate and transport sidesteps the
+// bridge-identity machinery, which is tested separately.
+func newFakeBridge(t *testing.T, h http.Handler) (*Client, *httptest.Server) {
+	t.Helper()
+	srv := httptest.NewTLSServer(h)
+	t.Cleanup(srv.Close)
+
+	c, err := New(srv.Listener.Addr().String(), "test-key",
+		WithTransport(srv.Client().Transport),
+		WithRateLimits(1000, 1000)) // do not make tests wait on token buckets
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	return c, srv
+}
+
+func TestListLights(t *testing.T) {
+	c, _ := newFakeBridge(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get(keyHeader); got != "test-key" {
+			t.Errorf("application key header = %q, want test-key", got)
+		}
+		if r.URL.Path != "/clip/v2/resource/light" {
+			t.Errorf("path = %q", r.URL.Path)
+		}
+		fmt.Fprint(w, `{"errors":[],"data":[
+			{"id":"abc","type":"light","metadata":{"name":"Desk"},
+			 "on":{"on":true},"dimming":{"brightness":42.5}}]}`)
+	}))
+
+	lights, err := c.Lights.List(context.Background())
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(lights) != 1 {
+		t.Fatalf("got %d lights, want 1", len(lights))
+	}
+	if lights[0].Name() != "Desk" || !lights[0].On.On {
+		t.Errorf("unexpected light: %+v", lights[0])
+	}
+	if lights[0].Dimming == nil || lights[0].Dimming.Brightness != 42.5 {
+		t.Errorf("brightness not decoded: %+v", lights[0].Dimming)
+	}
+}
+
+// The bridge returns 200 with a populated errors array for partially applied
+// updates. Treating that as success is the bug this test exists to prevent.
+func TestErrorsArrayOnSuccessStatus(t *testing.T) {
+	c, _ := newFakeBridge(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, `{"errors":[{"description":"device (light) is not powered"}],"data":[]}`)
+	}))
+
+	err := c.Lights.SetOn(context.Background(), "abc", true)
+	if err == nil {
+		t.Fatal("expected an error for a populated errors array")
+	}
+	if !strings.Contains(err.Error(), "not powered") {
+		t.Errorf("error did not carry the description: %v", err)
+	}
+}
+
+func TestUnauthorizedMapsToSentinel(t *testing.T) {
+	c, _ := newFakeBridge(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		fmt.Fprint(w, `{"errors":[{"description":"unauthorized user"}],"data":[]}`)
+	}))
+
+	_, err := c.Lights.List(context.Background())
+	if !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("got %v, want ErrUnauthorized", err)
+	}
+}
+
+// Partial-update semantics: an update that sets only brightness must not
+// serialize an "on" field, because doing so would command a state change the
+// caller never asked for.
+func TestPartialUpdateOmitsUnsetFields(t *testing.T) {
+	var body []byte
+	c, _ := newFakeBridge(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ = io.ReadAll(r.Body)
+		fmt.Fprint(w, `{"errors":[],"data":[]}`)
+	}))
+
+	if err := c.Lights.SetBrightness(context.Background(), "abc", 30, 400); err != nil {
+		t.Fatalf("SetBrightness: %v", err)
+	}
+
+	var decoded map[string]any
+	if err := json.Unmarshal(body, &decoded); err != nil {
+		t.Fatalf("request body was not JSON: %v", err)
+	}
+	if _, present := decoded["on"]; present {
+		t.Errorf("brightness-only update sent an 'on' field: %s", body)
+	}
+	if _, present := decoded["dimming"]; !present {
+		t.Errorf("update omitted dimming: %s", body)
+	}
+	if dyn, ok := decoded["dynamics"].(map[string]any); !ok || dyn["duration"] != float64(400) {
+		t.Errorf("transition not encoded: %s", body)
+	}
+}
+
+// Brightness zero is a real command, not an absent field. This is the exact
+// case pointer-valued update fields exist to disambiguate.
+func TestZeroBrightnessIsSent(t *testing.T) {
+	var body []byte
+	c, _ := newFakeBridge(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ = io.ReadAll(r.Body)
+		fmt.Fprint(w, `{"errors":[],"data":[]}`)
+	}))
+
+	if err := c.Lights.SetBrightness(context.Background(), "abc", 0, 0); err != nil {
+		t.Fatalf("SetBrightness: %v", err)
+	}
+	if !strings.Contains(string(body), `"brightness":0`) {
+		t.Errorf("zero brightness was dropped: %s", body)
+	}
+}
+
+func TestRoomGroupedLightID(t *testing.T) {
+	r := Room{Services: []Ref{
+		{RID: "svc-1", RType: TypeZigbeeConnect},
+		{RID: "svc-2", RType: TypeGroupedLight},
+	}}
+	id, ok := r.GroupedLightID()
+	if !ok || id != "svc-2" {
+		t.Errorf("got (%q, %v), want (svc-2, true)", id, ok)
+	}
+
+	if _, ok := (Room{}).GroupedLightID(); ok {
+		t.Error("empty room reported a grouped light")
+	}
+}
+
+func TestSubscribeDecodesBatches(t *testing.T) {
+	c, _ := newFakeBridge(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != eventStreamPath {
+			t.Errorf("stream path = %q", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, ": hi\n\n")
+		fmt.Fprint(w, "id: 1\ndata: [{\"creationtime\":\"2026-07-18T10:00:00Z\",\"type\":\"update\","+
+			"\"data\":[{\"id\":\"abc\",\"type\":\"light\",\"on\":{\"on\":false}}]}]\n\n")
+		w.(http.Flusher).Flush()
+		// Leave the connection open briefly so the reader is not racing a
+		// close, then let the handler return to end the stream.
+		time.Sleep(100 * time.Millisecond)
+	}))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	batches, _ := c.Subscribe(ctx)
+	select {
+	case b := <-batches:
+		if b.Type != "update" || len(b.Events) != 1 {
+			t.Fatalf("unexpected batch: %+v", b)
+		}
+		ev := b.Events[0]
+		if ev.ID != "abc" || ev.On == nil || ev.On.On {
+			t.Errorf("unexpected event: %+v", ev)
+		}
+		if ev.Dimming != nil {
+			t.Error("event carried a dimming field the bridge did not send")
+		}
+	case <-ctx.Done():
+		t.Fatal("no batch received")
+	}
+}
+
+func TestNewRequiresExplicitTLSPosture(t *testing.T) {
+	if _, err := New("192.0.2.1", "key"); err == nil {
+		t.Fatal("expected New to refuse an unconfigured trust posture")
+	}
+	if _, err := New("192.0.2.1", "key", WithInsecureTLS()); err != nil {
+		t.Fatalf("explicit insecure should be accepted: %v", err)
+	}
+}
+
+func TestBackoffIsBoundedAndJittered(t *testing.T) {
+	seen := map[time.Duration]bool{}
+	for i := 0; i < 50; i++ {
+		d := backoff(3)
+		if d <= 0 || d > 30*time.Second {
+			t.Fatalf("backoff(3) = %v, out of bounds", d)
+		}
+		seen[d] = true
+	}
+	if len(seen) < 2 {
+		t.Error("backoff produced no jitter")
+	}
+	if got := backoff(100); got > 30*time.Second {
+		t.Errorf("backoff(100) = %v, exceeds cap", got)
+	}
+}
