@@ -83,7 +83,10 @@ func usage() {
   sensors           show motion, light, temperature, and battery readings
   watch             stream events until interrupted
 
-Credentials are stored in ~/.config/foxfire/credentials.json.
+Credentials are stored under your OS config dir, mode 0600:
+  Linux    ~/.config/foxfire/credentials.json
+  macOS    ~/Library/Application Support/foxfire/credentials.json
+  Windows  %AppData%\foxfire\credentials.json
 `)
 }
 

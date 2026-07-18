@@ -67,7 +67,7 @@ foxfire on "Living Room"
 foxfire watch
 ```
 
-Credentials live in `~/.config/foxfire/credentials.json`, mode 0600 — the application key is a bearer token for every light in the house.
+Credentials live under your OS config directory, mode 0600 — the application key is a bearer token for every light in the house. That is `~/.config/foxfire/credentials.json` on Linux, `~/Library/Application Support/foxfire/credentials.json` on macOS, and `%AppData%\foxfire\credentials.json` on Windows (Go's `os.UserConfigDir`).
 
 ## Status
 
