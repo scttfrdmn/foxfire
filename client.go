@@ -42,6 +42,8 @@ type Client struct {
 	Devices       *DeviceService
 	Motion        *MotionService
 	Temperature   *TemperatureService
+	Bridge        *BridgeService
+	Zigbee        *ZigbeeConnectivityService
 }
 
 // Option configures a Client.
@@ -173,6 +175,8 @@ func New(addr, appKey string, opts ...Option) (*Client, error) {
 	c.Devices = &DeviceService{c: c}
 	c.Motion = &MotionService{c: c}
 	c.Temperature = &TemperatureService{c: c}
+	c.Bridge = &BridgeService{c: c}
+	c.Zigbee = &ZigbeeConnectivityService{c: c}
 
 	return c, nil
 }

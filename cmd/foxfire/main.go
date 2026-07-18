@@ -55,6 +55,8 @@ func run(args []string) error {
 		return cmdRooms(ctx)
 	case "on", "off":
 		return cmdSwitch(ctx, args)
+	case "bridge":
+		return cmdBridge(ctx)
 	case "watch":
 		return cmdWatch(ctx)
 	case "help", "-h", "--help":
@@ -75,6 +77,7 @@ func usage() {
   rooms             list rooms
   on   <room>       turn a room on
   off  <room>       turn a room off
+  bridge            show bridge id, firmware, and zigbee status
   watch             stream events until interrupted
 
 Credentials are stored in ~/.config/foxfire/credentials.json.
@@ -287,6 +290,44 @@ func cmdSwitch(ctx context.Context, args []string) error {
 		return fmt.Errorf("room %q has no grouped light service", name)
 	}
 	return c.GroupedLights.SetOn(ctx, gid, on)
+}
+
+func cmdBridge(ctx context.Context) error {
+	c, err := client()
+	if err != nil {
+		return err
+	}
+	b, err := c.Bridge.Self(ctx)
+	if err != nil {
+		return err
+	}
+
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintf(w, "Bridge ID\t%s\n", b.BridgeID)
+	tz := b.TimeZone.TimeZone
+	if tz == "" {
+		tz = "(unset)"
+	}
+	fmt.Fprintf(w, "Time zone\t%s\n", tz)
+
+	// Firmware lives on the owning device, not the bridge resource itself.
+	if b.Owner.RType == foxfire.TypeDevice {
+		if dev, err := c.Devices.Get(ctx, b.Owner.RID); err == nil {
+			fmt.Fprintf(w, "Model\t%s\n", dev.ProductData.ModelID)
+			fmt.Fprintf(w, "Firmware\t%s\n", dev.ProductData.SoftwareVersion)
+		}
+	}
+
+	if zs, err := c.Zigbee.List(ctx); err == nil {
+		for _, z := range zs {
+			reach := "unreachable"
+			if z.Reachable() {
+				reach = "connected"
+			}
+			fmt.Fprintf(w, "Zigbee\t%s (%s)\n", reach, z.MACAddress)
+		}
+	}
+	return w.Flush()
 }
 
 func cmdWatch(ctx context.Context) error {
