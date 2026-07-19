@@ -1,5 +1,7 @@
 # foxfire
 
+![foxfire — a modern Go client for the Philips Hue CLIP API v2](assets/hero.png)
+
 A modern Go client for the Philips Hue CLIP API v2.
 
 Foxfire is the bioluminescence of certain fungi growing in decaying wood — light produced without heat, discovered by anyone who has walked through a damp forest at night. It seemed like the right name for a lighting library.
