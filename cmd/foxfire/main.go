@@ -278,7 +278,7 @@ func cmdRooms(ctx context.Context) error {
 
 func cmdSwitch(ctx context.Context, args []string) error {
 	if len(args) < 2 {
-		return fmt.Errorf("usage: foxfire %s <room>", args[0])
+		return fmt.Errorf("usage: foxfire %s <room|light>", args[0])
 	}
 	on := args[0] == "on"
 	name := strings.Join(args[1:], " ")
@@ -287,15 +287,31 @@ func cmdSwitch(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
+
+	// Prefer a room: writing a room's grouped light is a single Zigbee
+	// multicast, far cheaper than touching members individually. Fall back to
+	// an individual light by name, so a hub with lights but no rooms -- a
+	// freshly paired bulb or strip -- is still controllable.
 	room, err := c.Rooms.ByName(ctx, name)
-	if err != nil {
+	if err == nil {
+		gid, ok := room.GroupedLightID()
+		if !ok {
+			return fmt.Errorf("room %q has no grouped light service", name)
+		}
+		return c.GroupedLights.SetOn(ctx, gid, on)
+	}
+	if !errors.Is(err, foxfire.ErrNotFound) {
 		return err
 	}
-	gid, ok := room.GroupedLightID()
-	if !ok {
-		return fmt.Errorf("room %q has no grouped light service", name)
+
+	light, lerr := c.Lights.ByName(ctx, name)
+	if lerr != nil {
+		if errors.Is(lerr, foxfire.ErrNotFound) {
+			return fmt.Errorf("no room or light named %q", name)
+		}
+		return lerr
 	}
-	return c.GroupedLights.SetOn(ctx, gid, on)
+	return c.Lights.SetOn(ctx, light.ID, on)
 }
 
 func cmdBridge(ctx context.Context) error {

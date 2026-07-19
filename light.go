@@ -1,6 +1,9 @@
 package foxfire
 
-import "context"
+import (
+	"context"
+	"fmt"
+)
 
 // On is the power state sub-resource.
 type On struct {
@@ -116,6 +119,22 @@ func (s *LightService) List(ctx context.Context) ([]Light, error) {
 
 func (s *LightService) Get(ctx context.Context, id ID) (Light, error) {
 	return getOne[Light](ctx, s.c, "/resource/light", id)
+}
+
+// ByName resolves a light by its user-facing label. Like Room.ByName, names
+// are neither unique nor stable, so this is a convenience for scripts and the
+// CLI rather than a foundation for a daemon. The first match wins.
+func (s *LightService) ByName(ctx context.Context, name string) (Light, error) {
+	lights, err := s.List(ctx)
+	if err != nil {
+		return Light{}, err
+	}
+	for _, l := range lights {
+		if l.Name() == name {
+			return l, nil
+		}
+	}
+	return Light{}, fmt.Errorf("%w: no light named %q", ErrNotFound, name)
 }
 
 // Update applies a partial change, spending a token from the per-light bucket.
