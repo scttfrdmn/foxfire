@@ -1,6 +1,9 @@
-// Command foxfire is a thin CLI over the library. It exists mostly as a
-// smoke test against real hardware -- if the CLI can pair, list, and watch,
-// the library works.
+// Command foxfire is a CLI over the library: discover and pair a bridge, list
+// and control lights, rooms, and devices, read sensors, rename devices, and
+// stream events. It doubles as the exercise harness against real hardware --
+// if the CLI can pair, list, control, and watch, the library works.
+//
+// Listing commands accept a global --json flag for machine-readable output.
 package main
 
 import (
@@ -12,12 +15,14 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"text/tabwriter"
 	"time"
 
 	"github.com/scttfrdmn/foxfire"
+	"github.com/scttfrdmn/foxfire/color"
 )
 
 type stored struct {
@@ -35,7 +40,16 @@ func main() {
 	}
 }
 
+// asJSON is set by the global --json flag. It is read by the listing commands,
+// which emit a JSON array instead of a table so the CLI composes with jq and
+// scripts rather than only human eyes.
+var asJSON bool
+
 func run(args []string) error {
+	// Pull the global --json flag out of the argument list wherever it appears,
+	// so it works both before and after the subcommand.
+	args = extractFlags(args)
+
 	if len(args) == 0 {
 		usage()
 		return nil
@@ -55,6 +69,8 @@ func run(args []string) error {
 		return cmdRooms(ctx)
 	case "on", "off":
 		return cmdSwitch(ctx, args)
+	case "set":
+		return cmdSet(ctx, args[1:])
 	case "bridge":
 		return cmdBridge(ctx)
 	case "sensors":
@@ -73,6 +89,29 @@ func run(args []string) error {
 	}
 }
 
+// extractFlags removes recognised global flags from args and records them,
+// returning the remaining positional arguments.
+func extractFlags(args []string) []string {
+	out := args[:0]
+	for _, a := range args {
+		switch a {
+		case "--json":
+			asJSON = true
+		default:
+			out = append(out, a)
+		}
+	}
+	return out
+}
+
+// emitJSON writes v as indented JSON. Listing commands call this when --json
+// is set; keeping it in one place keeps the output shape consistent.
+func emitJSON(v any) error {
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	return enc.Encode(v)
+}
+
 func usage() {
 	fmt.Print(`foxfire - Philips Hue CLIP v2 client
 
@@ -81,13 +120,17 @@ func usage() {
                     ID or IP to choose when more than one is present
   lights            list lights
   rooms             list rooms
-  on   <room>       turn a room on
-  off  <room>       turn a room off
+  on   <room|light>   turn a room or light on
+  off  <room|light>   turn a room or light off
+  set  <light> bri <0-100> | color <#hex>   set brightness or color
   bridge            show bridge id, firmware, and zigbee status
   sensors           show motion, light, temperature, and battery readings
   devices           list paired devices
   rename <old> <new>  rename a device
   watch             stream events until interrupted
+
+Global flags:
+  --json            emit machine-readable JSON from listing commands
 
 Credentials are stored under your OS config dir, mode 0600:
   Linux    ~/.config/foxfire/credentials.json
@@ -249,18 +292,28 @@ func cmdLights(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	if asJSON {
+		return emitJSON(lights)
+	}
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "NAME\tSTATE\tBRIGHTNESS\tID")
+	fmt.Fprintln(w, "NAME\tTYPE\tSTATE\tBRIGHTNESS\tID")
 	for _, l := range lights {
 		state := "off"
 		if l.On.On {
 			state = "on"
 		}
+		// A plug is a light with no dimming; show a dash rather than a
+		// meaningless brightness, and label the type so it is not mistaken
+		// for a dimmable bulb.
+		kind := "light"
+		if l.IsPlug() {
+			kind = "plug"
+		}
 		bri := "-"
-		if l.Dimming != nil {
+		if l.Dimming != nil && !l.IsPlug() {
 			bri = fmt.Sprintf("%.0f%%", l.Dimming.Brightness)
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", l.Name(), state, bri, l.ID)
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", l.Name(), kind, state, bri, l.ID)
 	}
 	return w.Flush()
 }
@@ -273,6 +326,9 @@ func cmdRooms(ctx context.Context) error {
 	rooms, err := c.Rooms.List(ctx)
 	if err != nil {
 		return err
+	}
+	if asJSON {
+		return emitJSON(rooms)
 	}
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(w, "NAME\tDEVICES\tID")
@@ -318,6 +374,62 @@ func cmdSwitch(ctx context.Context, args []string) error {
 		return lerr
 	}
 	return c.Lights.SetOn(ctx, light.ID, on)
+}
+
+// cmdSet controls brightness and color of an individual light by name:
+//
+//	foxfire set "Hue lightstrip 1" bri 40
+//	foxfire set "Hue lightstrip 1" color #ff8800
+//
+// It targets a single light rather than a room because color and brightness
+// are per-light concerns; the on/off command is the one that fans out to a
+// room's grouped light.
+func cmdSet(ctx context.Context, args []string) error {
+	if len(args) < 3 {
+		return fmt.Errorf(`usage: foxfire set "<light>" bri <0-100> | color <#hex>`)
+	}
+	name, attr, value := args[0], args[1], args[2]
+
+	c, err := client()
+	if err != nil {
+		return err
+	}
+	light, err := c.Lights.ByName(ctx, name)
+	if err != nil {
+		return err
+	}
+
+	switch attr {
+	case "bri", "brightness":
+		pct, perr := strconv.ParseFloat(value, 64)
+		if perr != nil || pct < 0 || pct > 100 {
+			return fmt.Errorf("brightness must be a number 0-100, got %q", value)
+		}
+		// A one-second fade reads as intentional rather than abrupt.
+		return c.Lights.SetBrightness(ctx, light.ID, pct, 1000)
+	case "color":
+		if light.Color == nil {
+			return fmt.Errorf("light %q does not support color", name)
+		}
+		rgb, cerr := color.Hex(value)
+		if cerr != nil {
+			return cerr
+		}
+		// Clamp to the light's own gamut so the requested color is the one that
+		// lands, rather than whatever the bridge silently moves it to.
+		var cu *foxfire.ColorUpdate
+		if light.Color.Gamut != nil {
+			cu = color.UpdateInGamut(rgb, *light.Color.Gamut)
+		} else {
+			cu = color.Update(rgb)
+		}
+		return c.Lights.Update(ctx, light.ID, foxfire.LightUpdate{
+			Color:    cu,
+			Dynamics: &foxfire.Dynamics{Duration: foxfire.Int(1000)},
+		})
+	default:
+		return fmt.Errorf("unknown attribute %q; use bri or color", attr)
+	}
 }
 
 func cmdBridge(ctx context.Context) error {
@@ -410,6 +522,9 @@ func cmdDevices(ctx context.Context) error {
 	devices, err := c.Devices.List(ctx)
 	if err != nil {
 		return err
+	}
+	if asJSON {
+		return emitJSON(devices)
 	}
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(w, "NAME\tPRODUCT\tMODEL\tID")
