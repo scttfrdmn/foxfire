@@ -350,6 +350,22 @@ func TestDeviceRename(t *testing.T) {
 	}
 }
 
+// A smart plug is a light with archetype "plug". IsPlug is what lets a UI
+// avoid showing a brightness slider for an outlet.
+func TestLightIsPlug(t *testing.T) {
+	plug := Light{Metadata: Metadata{Name: "Outlet", Archetype: "plug"}}
+	if !plug.IsPlug() {
+		t.Error("plug archetype not detected")
+	}
+	bulb := Light{Metadata: Metadata{Name: "Lamp", Archetype: "sultan_bulb"}}
+	if bulb.IsPlug() {
+		t.Error("bulb misidentified as a plug")
+	}
+	if (Light{}).IsPlug() {
+		t.Error("archetype-less light misidentified as a plug")
+	}
+}
+
 func TestNewRequiresExplicitTLSPosture(t *testing.T) {
 	if _, err := New("192.0.2.1", "key"); err == nil {
 		t.Fatal("expected New to refuse an unconfigured trust posture")

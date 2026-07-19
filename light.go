@@ -72,6 +72,15 @@ type Light struct {
 // Name is a convenience for the common case of wanting the user-facing label.
 func (l Light) Name() string { return l.Metadata.Name }
 
+// IsPlug reports whether this "light" is really a smart plug or outlet. The
+// bridge models a plug as a light with archetype "plug" and no dimming or
+// color -- so it turns on and off through exactly the same path as a bulb, but
+// a UI that shows a brightness slider or color picker should hide those for a
+// plug. Keying off the archetype is the only signal the model gives.
+func (l Light) IsPlug() bool {
+	return l.Metadata.Archetype == "plug"
+}
+
 // LightUpdate is a partial update. Every field is optional; absent fields are
 // left untouched by the bridge. Construct with the Bool/Float helpers:
 //
