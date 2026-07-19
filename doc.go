@@ -4,8 +4,8 @@
 //
 //   - The bridge speaks HTTPS only (RED compliance, Aug 2025 firmware onward)
 //     and presents a self-signed certificate whose Common Name is the bridge
-//     ID. Verification is strict by default: see WithBridgeID and
-//     WithSignifyRoot. Use WithInsecureTLS only for bring-up.
+//     ID. Verification is strict by default: see WithBridgeID, WithRootCA, and
+//     WithPinnedFingerprint. Use WithInsecureTLS only for bring-up.
 //
 //   - Every mutation is a partial PUT. A field that is present is a command;
 //     a field that is absent is "leave alone". Therefore every field on an

@@ -119,8 +119,9 @@ type Scene struct {
 	Speed    float64  `json:"speed,omitempty"`
 }
 
-// RecallAction values. "active" applies the scene; "dynamic_palette" starts
-// the scene cycling through its palette, which is the v2 headline feature.
+// Recall action values, passed to SceneService.Recall. "active" applies the
+// scene; "dynamic_palette" starts it cycling through its palette, which is the
+// v2 headline feature.
 const (
 	RecallActive  = "active"
 	RecallDynamic = "dynamic_palette"
@@ -370,10 +371,10 @@ func (s *TemperatureService) Get(ctx context.Context, id ID) (Temperature, error
 }
 
 // LightLevel is an ambient-light sensor service. The raw value is not lux: the
-// bridge reports 10000*log10(lux)+1, so lux = 10^((level-1)/10000). LightValid
-// distinguishes a real reading from a stale one on a disabled or sleeping
-// sensor, and must be checked -- a disabled sensor reports its last value, not
-// zero and not an error.
+// bridge reports 10000*log10(lux)+1, so lux = 10^((level-1)/10000).
+// Light.LightLevelValid distinguishes a real reading from a stale one on a
+// disabled or sleeping sensor, and must be checked -- a disabled sensor
+// reports its last value, not zero and not an error.
 type LightLevel struct {
 	ID      ID     `json:"id"`
 	Type    string `json:"type"`

@@ -52,7 +52,7 @@ type TemperatureReport struct {
 }
 
 type ButtonReport struct {
-	LastEvent string `json:"last_event"` // initial_press, repeat, short_release, long_release
+	LastEvent string `json:"last_event"` // initial_press, repeat, short_release, long_press, long_release
 }
 
 // EventBatch is one dispatched frame. The bridge coalesces changes that occur
