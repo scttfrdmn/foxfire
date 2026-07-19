@@ -320,6 +320,36 @@ func TestCreateWithNoReferenceErrors(t *testing.T) {
 	}
 }
 
+// Rename is a metadata edit, not a command. It must PUT only the name, and it
+// must not send any of the state fields that would command a change.
+func TestDeviceRename(t *testing.T) {
+	var body []byte
+	var method, path string
+	c, _ := newFakeBridge(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		method, path = r.Method, r.URL.Path
+		body, _ = io.ReadAll(r.Body)
+		fmt.Fprint(w, `{"errors":[],"data":[{"rid":"dev-1","rtype":"device"}]}`)
+	}))
+
+	if err := c.Devices.Rename(context.Background(), "dev-1", "Kitchen"); err != nil {
+		t.Fatalf("Rename: %v", err)
+	}
+	if method != http.MethodPut || path != "/clip/v2/resource/device/dev-1" {
+		t.Errorf("got %s %s, want PUT /clip/v2/resource/device/dev-1", method, path)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(body, &decoded); err != nil {
+		t.Fatalf("body not JSON: %v", err)
+	}
+	md, ok := decoded["metadata"].(map[string]any)
+	if !ok || md["name"] != "Kitchen" {
+		t.Errorf("rename body did not carry the name: %s", body)
+	}
+	if _, present := decoded["on"]; present {
+		t.Errorf("rename sent an 'on' field: %s", body)
+	}
+}
+
 func TestNewRequiresExplicitTLSPosture(t *testing.T) {
 	if _, err := New("192.0.2.1", "key"); err == nil {
 		t.Fatal("expected New to refuse an unconfigured trust posture")

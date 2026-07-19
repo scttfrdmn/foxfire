@@ -59,6 +59,10 @@ func run(args []string) error {
 		return cmdBridge(ctx)
 	case "sensors":
 		return cmdSensors(ctx)
+	case "devices":
+		return cmdDevices(ctx)
+	case "rename":
+		return cmdRename(ctx, args[1:])
 	case "watch":
 		return cmdWatch(ctx)
 	case "help", "-h", "--help":
@@ -81,6 +85,8 @@ func usage() {
   off  <room>       turn a room off
   bridge            show bridge id, firmware, and zigbee status
   sensors           show motion, light, temperature, and battery readings
+  devices           list paired devices
+  rename <old> <new>  rename a device
   watch             stream events until interrupted
 
 Credentials are stored under your OS config dir, mode 0600:
@@ -394,6 +400,48 @@ func cmdSensors(ctx context.Context) error {
 		}
 	}
 	return w.Flush()
+}
+
+func cmdDevices(ctx context.Context) error {
+	c, err := client()
+	if err != nil {
+		return err
+	}
+	devices, err := c.Devices.List(ctx)
+	if err != nil {
+		return err
+	}
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "NAME\tPRODUCT\tMODEL\tID")
+	for _, d := range devices {
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n",
+			d.Metadata.Name, d.ProductData.ProductName, d.ProductData.ModelID, d.ID)
+	}
+	return w.Flush()
+}
+
+func cmdRename(ctx context.Context, args []string) error {
+	// Names routinely contain spaces ("Hue lightstrip 1"), so require exactly
+	// two arguments and let the shell's quoting delimit them rather than trying
+	// to guess where the old name ends and the new one begins.
+	if len(args) != 2 {
+		return fmt.Errorf(`usage: foxfire rename "<old name>" "<new name>"`)
+	}
+	oldName, newName := args[0], args[1]
+
+	c, err := client()
+	if err != nil {
+		return err
+	}
+	dev, err := c.Devices.ByName(ctx, oldName)
+	if err != nil {
+		return err
+	}
+	if err := c.Devices.Rename(ctx, dev.ID, newName); err != nil {
+		return err
+	}
+	fmt.Printf("Renamed %q to %q\n", oldName, newName)
+	return nil
 }
 
 func cmdWatch(ctx context.Context) error {

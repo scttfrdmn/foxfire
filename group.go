@@ -220,6 +220,32 @@ func (s *DeviceService) Get(ctx context.Context, id ID) (Device, error) {
 	return getOne[Device](ctx, s.c, "/resource/device", id)
 }
 
+// ByName resolves a device by its user-facing label. First match wins; names
+// are neither unique nor stable, so this is a convenience, not a key.
+func (s *DeviceService) ByName(ctx context.Context, name string) (Device, error) {
+	devices, err := s.List(ctx)
+	if err != nil {
+		return Device{}, err
+	}
+	for _, d := range devices {
+		if d.Metadata.Name == name {
+			return d, nil
+		}
+	}
+	return Device{}, fmt.Errorf("%w: no device named %q", ErrNotFound, name)
+}
+
+// Rename changes a device's user-facing name. This is a metadata edit, not a
+// command, so it passes nil for the limiter: renames must not spend from the
+// light or grouped-light buckets, which exist to protect against dropping
+// actual light commands.
+func (s *DeviceService) Rename(ctx context.Context, id ID, name string) error {
+	body := struct {
+		Metadata Metadata `json:"metadata"`
+	}{Metadata: Metadata{Name: name}}
+	return put(ctx, s.c, "/resource/device", id, body, nil)
+}
+
 // Motion is a presence sensor service. Enabled is separately controllable
 // from Motion.Motion, and a disabled sensor reports stale values rather than
 // an error, which is worth guarding against.
