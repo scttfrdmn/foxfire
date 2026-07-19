@@ -90,6 +90,50 @@ func put(ctx context.Context, c *Client, path string, id ID, body any, limiter *
 	return c.do(req, &env)
 }
 
+// post creates a resource and returns a reference to it. Unlike put, POST
+// bodies carry no ID in the path -- the bridge assigns one and returns it in
+// the update envelope's data array. limiter follows the same convention as
+// put: pass nil for creation of configuration resources (rooms, zones, scenes)
+// which are not command traffic and should not share the light buckets.
+func post(ctx context.Context, c *Client, path string, body any, limiter *rate.Limiter) (Ref, error) {
+	if limiter != nil {
+		if err := limiter.Wait(ctx); err != nil {
+			return Ref{}, fmt.Errorf("foxfire: rate limiter: %w", err)
+		}
+	}
+	payload, err := json.Marshal(body)
+	if err != nil {
+		return Ref{}, fmt.Errorf("foxfire: encoding create: %w", err)
+	}
+	req, err := c.newRequest(ctx, http.MethodPost, c.url(path), payload)
+	if err != nil {
+		return Ref{}, err
+	}
+	var env updateEnvelope
+	if err := c.do(req, &env); err != nil {
+		return Ref{}, err
+	}
+	if len(env.Data) == 0 {
+		// A create that reports no error but returns no reference is a bridge
+		// contract violation; surface it rather than handing back a zero Ref
+		// the caller would treat as a valid ID.
+		return Ref{}, fmt.Errorf("foxfire: create at %s returned no resource reference", path)
+	}
+	return env.Data[0], nil
+}
+
+// del removes a resource by ID. Like scene edits, deletion is configuration
+// rather than command traffic, so it does not spend from a light bucket.
+func del(ctx context.Context, c *Client, path string, id ID) error {
+	req, err := c.newRequest(ctx, http.MethodDelete,
+		fmt.Sprintf("%s/%s", c.url(path), id), nil)
+	if err != nil {
+		return err
+	}
+	var env updateEnvelope
+	return c.do(req, &env)
+}
+
 // do executes a request and decodes the envelope, mapping both HTTP status
 // and the bridge's errors array onto Go errors.
 func (c *Client) do(req *http.Request, out any) error {

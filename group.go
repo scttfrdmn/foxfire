@@ -83,6 +83,33 @@ func (s *ZoneService) Get(ctx context.Context, id ID) (Zone, error) {
 	return getOne[Zone](ctx, s.c, "/resource/zone", id)
 }
 
+// ZoneCreate is the body for creating a zone. Children references the light
+// services the zone groups -- note "light" services, not devices: a zone
+// groups the actuation points, which is what lets one light belong to several
+// zones. The bridge creates the zone's own grouped_light automatically.
+type ZoneCreate struct {
+	Metadata Metadata `json:"metadata"`
+	Children []Ref    `json:"children"`
+}
+
+// Create makes a new zone and returns a reference to it. Configuration, not
+// command traffic, so it is unthrottled.
+//
+// Note the asymmetry with reads: on creation the bridge *requires* an
+// archetype, though it is optional when reading a zone back. Rather than make
+// every caller remember that, an empty archetype defaults to "other".
+func (s *ZoneService) Create(ctx context.Context, zc ZoneCreate) (Ref, error) {
+	if zc.Metadata.Archetype == "" {
+		zc.Metadata.Archetype = "other"
+	}
+	return post(ctx, s.c, "/resource/zone", zc, nil)
+}
+
+// Delete removes a zone. Its auto-created grouped_light goes with it.
+func (s *ZoneService) Delete(ctx context.Context, id ID) error {
+	return del(ctx, s.c, "/resource/zone", id)
+}
+
 // Scene is a stored set of per-light states scoped to a room or zone.
 type Scene struct {
 	ID       ID       `json:"id"`
@@ -107,6 +134,32 @@ type sceneRecall struct {
 	} `json:"recall"`
 }
 
+// SceneAction is one light's target state within a scene. The Target is the
+// light service the state applies to; the fields mirror a LightUpdate but are
+// stored rather than applied immediately. A scene must carry an action for
+// every light it means to control -- a light with no action is left at
+// whatever it was when the scene is recalled.
+type SceneAction struct {
+	Target Ref              `json:"target"`
+	Action SceneTargetState `json:"action"`
+}
+
+type SceneTargetState struct {
+	On               *On                     `json:"on,omitempty"`
+	Dimming          *DimmingUpdate          `json:"dimming,omitempty"`
+	Color            *ColorUpdate            `json:"color,omitempty"`
+	ColorTemperature *ColorTemperatureUpdate `json:"color_temperature,omitempty"`
+}
+
+// SceneCreate is the body for creating a scene. Group must reference a room or
+// zone; the bridge rejects a scene scoped to anything else. Actions holds the
+// per-light target states.
+type SceneCreate struct {
+	Metadata Metadata      `json:"metadata"`
+	Group    Ref           `json:"group"`
+	Actions  []SceneAction `json:"actions"`
+}
+
 type SceneService struct{ c *Client }
 
 func (s *SceneService) List(ctx context.Context) ([]Scene, error) {
@@ -115,6 +168,19 @@ func (s *SceneService) List(ctx context.Context) ([]Scene, error) {
 
 func (s *SceneService) Get(ctx context.Context, id ID) (Scene, error) {
 	return getOne[Scene](ctx, s.c, "/resource/scene", id)
+}
+
+// Create stores a new scene and returns a reference to it. Creation is
+// configuration, not command traffic, so it is not throttled against the
+// light buckets. The group must be a room or zone; build actions with the
+// same pointer helpers used for light updates.
+func (s *SceneService) Create(ctx context.Context, sc SceneCreate) (Ref, error) {
+	return post(ctx, s.c, "/resource/scene", sc, nil)
+}
+
+// Delete removes a scene.
+func (s *SceneService) Delete(ctx context.Context, id ID) error {
+	return del(ctx, s.c, "/resource/scene", id)
 }
 
 // Recall applies a scene. transitionMS of 0 uses the scene's stored duration.

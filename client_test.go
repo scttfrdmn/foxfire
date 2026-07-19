@@ -249,6 +249,77 @@ func TestButtonEventDecodes(t *testing.T) {
 	}
 }
 
+// Scene creation goes through POST and returns the bridge-assigned reference
+// in the update envelope. This checks the method, the body, and that the
+// returned Ref is decoded -- and that Zone.Create fills in the archetype the
+// bridge requires on create but treats as optional on read.
+func TestSceneAndZoneCreate(t *testing.T) {
+	var sceneBody, zoneBody []byte
+	c, _ := newFakeBridge(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Errorf("method = %s, want POST", r.Method)
+		}
+		switch r.URL.Path {
+		case "/clip/v2/resource/zone":
+			zoneBody, _ = io.ReadAll(r.Body)
+			fmt.Fprint(w, `{"errors":[],"data":[{"rid":"zone-1","rtype":"zone"}]}`)
+		case "/clip/v2/resource/scene":
+			sceneBody, _ = io.ReadAll(r.Body)
+			fmt.Fprint(w, `{"errors":[],"data":[{"rid":"scene-1","rtype":"scene"}]}`)
+		default:
+			t.Errorf("unexpected path %q", r.URL.Path)
+		}
+	}))
+
+	zref, err := c.Zones.Create(context.Background(), ZoneCreate{
+		Metadata: Metadata{Name: "Z"},
+		Children: []Ref{{RID: "light-1", RType: TypeLight}},
+	})
+	if err != nil {
+		t.Fatalf("Zone.Create: %v", err)
+	}
+	if zref.RID != "zone-1" || zref.RType != TypeZone {
+		t.Errorf("zone ref = %+v", zref)
+	}
+	// The archetype the read shape omits must be supplied on create.
+	var zm map[string]any
+	_ = json.Unmarshal(zoneBody, &zm)
+	if md, ok := zm["metadata"].(map[string]any); !ok || md["archetype"] != "other" {
+		t.Errorf("zone create did not default archetype: %s", zoneBody)
+	}
+
+	sref, err := c.Scenes.Create(context.Background(), SceneCreate{
+		Metadata: Metadata{Name: "S"},
+		Group:    Ref{RID: "zone-1", RType: TypeZone},
+		Actions: []SceneAction{{
+			Target: Ref{RID: "light-1", RType: TypeLight},
+			Action: SceneTargetState{On: &On{On: true}},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Scene.Create: %v", err)
+	}
+	if sref.RID != "scene-1" {
+		t.Errorf("scene ref = %+v", sref)
+	}
+	if !strings.Contains(string(sceneBody), `"actions"`) {
+		t.Errorf("scene body missing actions: %s", sceneBody)
+	}
+}
+
+// A create that reports no error but returns no reference is a bridge contract
+// violation, and post must surface it rather than return a zero Ref that reads
+// as a valid ID.
+func TestCreateWithNoReferenceErrors(t *testing.T) {
+	c, _ := newFakeBridge(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, `{"errors":[],"data":[]}`)
+	}))
+	_, err := c.Zones.Create(context.Background(), ZoneCreate{Metadata: Metadata{Name: "Z"}})
+	if err == nil {
+		t.Fatal("expected an error when create returns no reference")
+	}
+}
+
 func TestNewRequiresExplicitTLSPosture(t *testing.T) {
 	if _, err := New("192.0.2.1", "key"); err == nil {
 		t.Fatal("expected New to refuse an unconfigured trust posture")
